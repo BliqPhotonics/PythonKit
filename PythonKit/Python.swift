@@ -115,6 +115,14 @@ public struct PythonObject {
     }
 }
 
+public struct PythonObjectContainer {
+    let name: String
+    let object: PythonObject?
+    let error: Error?
+}
+
+public var pythonObjects: [String: PythonObjectContainer] = [:]
+
 // Make `print(python)` print a pretty form of the `PythonObject`.
 extension PythonObject : CustomStringConvertible {
     /// A textual description of this `PythonObject`, produced by `Python.str`.
