@@ -53,7 +53,7 @@ public struct PythonLibrary {
     private static let defaultLibraryHandle: UnsafeMutableRawPointer? = nil  // Unsupported
     #endif
     
-    private static var isPythonLibraryLoaded = false
+    public static var isPythonLibraryLoaded = false
     private static var _pythonLibraryHandle: UnsafeMutableRawPointer?
     private static var pythonLibraryHandle: UnsafeMutableRawPointer? {
         try! PythonLibrary.loadLibrary()
