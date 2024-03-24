@@ -19,6 +19,18 @@
 //
 //===----------------------------------------------------------------------===//
 
+struct GILState {
+    private var threadState: UnsafeMutableRawPointer? = nil
+
+    mutating func ensure() {
+        threadState = PyGILState_Ensure()
+    }
+
+    mutating func release() {
+        PyGILState_Release(threadState)
+    }
+}
+
 //===----------------------------------------------------------------------===//
 // `PyReference` definition
 //===----------------------------------------------------------------------===//
@@ -55,7 +67,10 @@ final class PyReference {
     }
     
     deinit {
+        var lock = GILState()
+        lock.ensure()
         Py_DecRef(pointer)
+        lock.release()
     }
     
     var borrowedPyObject: PyObjectPointer {
@@ -255,6 +270,9 @@ extension PythonError : CustomStringConvertible {
 // Reflect a Python error (which must be active) into a Swift error if one is
 // active.
 private func throwPythonErrorIfPresent() throws {
+    var lock = GILState()
+    lock.ensure()
+    defer { lock.release() }
     if PyErr_Occurred() == nil { return }
     
     var type: PyObjectPointer?
@@ -303,6 +321,7 @@ public struct ThrowingPythonObject {
         withArguments args: [PythonConvertible] = []) throws -> PythonObject {
         try throwPythonErrorIfPresent()
         
+        let threadState = PyGILState_Ensure()
         // Positional arguments are passed as a tuple of objects.
         let argTuple = pyTuple(args.map { $0.pythonObject })
         defer { Py_DecRef(argTuple) }
@@ -313,6 +332,8 @@ public struct ThrowingPythonObject {
         // error, like `self` not being a Python callable.
         let selfObject = base.ownedPyObject
         defer { Py_DecRef(selfObject) }
+
+        defer { PyGILState_Release(threadState) }
         
         guard let result = PyObject_CallObject(selfObject, argTuple) else {
             // If a Python exception was thrown, throw a corresponding Swift error.
@@ -345,6 +366,9 @@ public struct ThrowingPythonObject {
     /// Implementation of `dynamicallyCall(withKeywordArguments)`.
     private func _dynamicallyCall<T : Collection>(_ args: T) throws -> PythonObject
     where T.Element == (key: String, value: PythonConvertible) {
+        var lock = GILState()
+        lock.ensure()
+        defer { lock.release() }
         try throwPythonErrorIfPresent()
         
         // An array containing positional arguments.
@@ -449,6 +473,9 @@ public struct CheckingPythonObject {
     
     public subscript(dynamicMember name: String) -> PythonObject? {
         get {
+            var lock = GILState()
+            lock.ensure()
+            defer { lock.release() }
             let selfObject = base.ownedPyObject
             defer { Py_DecRef(selfObject) }
             guard let result = PyObject_GetAttrString(selfObject, name) else {
@@ -567,6 +594,10 @@ public extension PythonObject {
             defer { Py_DecRef(selfObject) }
             let valueObject = newValue.ownedPyObject
             defer { Py_DecRef(valueObject) }
+
+            var lock = GILState()
+            lock.ensure()
+            defer { lock.release() }
             
             if PyObject_SetAttrString(selfObject, memberName, valueObject) == -1 {
                 try! throwPythonErrorIfPresent()
@@ -684,6 +715,9 @@ public struct PythonInterface {
     
     init() {
         Py_Initialize()   // Initialize Python
+        let threadState = PyGILState_Ensure()
+        defer { PyGILState_Release(threadState) }
+
         builtins = PythonObject(PyEval_GetBuiltins())
         
         // Runtime Fixes:
@@ -700,9 +734,14 @@ public struct PythonInterface {
             if sys.version_info.major == 3 and sys.platform == "darwin":
                 sys.executable = os.path.join(sys.exec_prefix, "bin", "python3")
             """)
+
+
     }
     
     public func attemptImport(_ name: String) throws -> PythonObject {
+        let threadState = PyGILState_Ensure()
+        defer { PyGILState_Release(threadState) }
+
         guard let module = PyImport_ImportModule(name) else {
             try throwPythonErrorIfPresent()
             throw PythonError.invalidModule(name)
@@ -799,13 +838,19 @@ extension Bool : PythonConvertible, ConvertibleFromPython {
         guard isType(pythonObject, type: PyBool_Type) else { return nil }
         
         let pyObject = pythonObject.ownedPyObject
-        defer { Py_DecRef(pyObject) }
+        defer {
+            let threadState = PyGILState_Ensure()
+            Py_DecRef(pyObject)
+            PyGILState_Release(threadState)
+        }
         
         self = pyObject == _Py_TrueStruct
     }
     
     public var pythonObject: PythonObject {
         _ = Python // Ensure Python is initialized.
+        let threadState = PyGILState_Ensure()
+        defer { PyGILState_Release(threadState) }
         return PythonObject(consuming: PyBool_FromLong(self ? 1 : 0))
     }
 }
@@ -813,7 +858,11 @@ extension Bool : PythonConvertible, ConvertibleFromPython {
 extension String : PythonConvertible, ConvertibleFromPython {
     public init?(_ pythonObject: PythonObject) {
         let pyObject = pythonObject.ownedPyObject
-        defer { Py_DecRef(pyObject) }
+        defer {
+            let threadState = PyGILState_Ensure()
+            Py_DecRef(pyObject)
+            PyGILState_Release(threadState)
+        }
         
         guard let cString = PyString_AsString(pyObject) else {
             PyErr_Clear()
@@ -824,6 +873,9 @@ extension String : PythonConvertible, ConvertibleFromPython {
     
     public var pythonObject: PythonObject {
         _ = Python // Ensure Python is initialized.
+        let threadState = PyGILState_Ensure()
+        defer { PyGILState_Release(threadState) }
+
         let v = utf8CString.withUnsafeBufferPointer {
             // 1 is subtracted from the C string length to trim the trailing null
             // character (`\0`).
@@ -839,8 +891,13 @@ fileprivate extension PythonObject {
     func converted<T : Equatable>(
         withError errorValue: T, by converter: (OwnedPyObjectPointer) -> T
     ) -> T? {
+        let threadState = PyGILState_Ensure()
+
         let pyObject = ownedPyObject
-        defer { Py_DecRef(pyObject) }
+        defer {
+            Py_DecRef(pyObject)
+            PyGILState_Release(threadState)
+        }
         
         assert(PyErr_Occurred() == nil,
                "Python error occurred somewhere but wasn't handled")
@@ -868,6 +925,8 @@ extension Int : PythonConvertible, ConvertibleFromPython {
     
     public var pythonObject: PythonObject {
         _ = Python // Ensure Python is initialized.
+        let threadState = PyGILState_Ensure()
+        defer { PyGILState_Release(threadState) }
         return PythonObject(consuming: PyInt_FromLong(self))
     }
 }
@@ -886,6 +945,8 @@ extension UInt : PythonConvertible, ConvertibleFromPython {
     
     public var pythonObject: PythonObject {
         _ = Python // Ensure Python is initialized.
+        let threadState = PyGILState_Ensure()
+        defer { PyGILState_Release(threadState) }
         return PythonObject(consuming: PyInt_FromSize_t(self))
     }
 }
@@ -903,6 +964,8 @@ extension Double : PythonConvertible, ConvertibleFromPython {
     
     public var pythonObject: PythonObject {
         _ = Python // Ensure Python is initialized.
+        let threadState = PyGILState_Ensure()
+        defer { PyGILState_Release(threadState) }
         return PythonObject(consuming: PyFloat_FromDouble(self))
     }
 }
@@ -1053,6 +1116,8 @@ where Wrapped : ConvertibleFromPython {
 extension Array : PythonConvertible where Element : PythonConvertible {
     public var pythonObject: PythonObject {
         _ = Python // Ensure Python is initialized.
+        let threadState = PyGILState_Ensure()
+        defer { PyGILState_Release(threadState) }
         let list = PyList_New(count)!
         for (index, element) in enumerated() {
             // `PyList_SetItem` steals the reference of the object stored.
@@ -1078,6 +1143,9 @@ extension Dictionary : PythonConvertible
 where Key : PythonConvertible, Value : PythonConvertible {
     public var pythonObject: PythonObject {
         _ = Python // Ensure Python is initialized.
+        let threadState = PyGILState_Ensure()
+        defer { PyGILState_Release(threadState) }
+
         let dict = PyDict_New()!
         for (key, value) in self {
             let k = key.ownedPyObject
@@ -1193,6 +1261,9 @@ private typealias PythonUnaryOp =
 
 private func performBinaryOp(
     _ op: PythonBinaryOp, lhs: PythonObject, rhs: PythonObject) -> PythonObject {
+
+    let threadState = PyGILState_Ensure()
+    defer { PyGILState_Release(threadState) }
     let result = op(lhs.borrowedPyObject, rhs.borrowedPyObject)
     // If binary operation fails (e.g. due to `TypeError`), throw an exception.
     try! throwPythonErrorIfPresent()
@@ -1307,9 +1378,12 @@ extension PythonObject : Equatable, Comparable {
     private func compared(to other: PythonObject, byOp: Int32) -> Bool {
         let lhsObject = ownedPyObject
         let rhsObject = other.ownedPyObject
+        var lock = GILState()
+        lock.ensure()
         defer {
             Py_DecRef(lhsObject)
             Py_DecRef(rhsObject)
+            lock.release()
         }
         assert(PyErr_Occurred() == nil,
                "Python error occurred somewhere but wasn't handled")
@@ -1351,9 +1425,12 @@ public extension PythonObject {
     private func compared(to other: PythonObject, byOp: Int32) -> PythonObject {
         let lhsObject = ownedPyObject
         let rhsObject = other.ownedPyObject
+        var lock = GILState()
+        lock.ensure()
         defer {
             Py_DecRef(lhsObject)
             Py_DecRef(rhsObject)
+            lock.release()
         }
         assert(PyErr_Occurred() == nil,
                "Python error occurred somewhere but wasn't handled")
@@ -1488,6 +1565,8 @@ extension PythonObject : ExpressibleByArrayLiteral, ExpressibleByDictionaryLiter
     // existing key with the next one it encounters.
     public init(dictionaryLiteral elements: (PythonObject, PythonObject)...) {
         _ = Python // Ensure Python is initialized.
+        let threadState = PyGILState_Ensure()
+        defer { PyGILState_Release(threadState) }
         let dict = PyDict_New()!
         for (key, value) in elements {
             let k = key.ownedPyObject
@@ -1520,7 +1599,12 @@ public struct PythonBytes : PythonConvertible, ConvertibleFromPython, Hashable {
         // We try to get the string/size pointers out. If it works, hooray, this is a bytes
         // otherwise it isn't.
         let pyObject = pythonObject.ownedPyObject
-        defer { Py_DecRef(pyObject) }
+        var lock = GILState()
+        lock.ensure()
+        defer {
+            Py_DecRef(pyObject)
+            lock.release()
+        }
 
         var length = 0
         var buffer: UnsafeMutablePointer<CChar>? = nil
@@ -1584,7 +1668,13 @@ public struct PythonBytes : PythonConvertible, ConvertibleFromPython, Hashable {
         _ callback: (UnsafeRawBufferPointer) throws -> ReturnValue
     ) rethrows -> ReturnValue {
         let pyObject = self.pythonObject.ownedPyObject
-        defer { Py_DecRef(pyObject) }
+
+        var lock = GILState()
+        lock.ensure()
+        defer {
+            Py_DecRef(pyObject)
+            lock.release()
+        }
 
         var length = 0
         var buffer: UnsafeMutablePointer<CChar>? = nil
@@ -1682,6 +1772,14 @@ public struct PythonFunction {
             return try fn(argumentsAsTuple.map { $0 })
         }
     }
+
+    public init(_ fn: @escaping ([PythonObject]) throws -> Void) {
+        let f: ([PythonObject]) throws -> PythonConvertible = {
+            try fn($0)
+            return PyNone()
+        }
+        self.init(f)
+    }
     
     /// For cases where the Swift function should accept keyword arguments as `**kwargs` in Python.
     /// `**kwargs` must preserve order from Python 3.6 onward, similarly to
@@ -1697,10 +1795,22 @@ public struct PythonFunction {
             return try fn(argumentsAsTuple.map { $0 }, kwargs)
         }
     }
+
+    public init(_ fn: @escaping ([PythonObject], [(key: String, value: PythonObject)]) throws -> Void) {
+        let f: ([PythonObject], [(key: String, value: PythonObject)]) throws -> PythonConvertible = {
+            try fn($0, $1)
+            return PyNone()
+        }
+        self.init(f)
+    }
 }
 
 extension PythonFunction : PythonConvertible {
     public var pythonObject: PythonObject {
+        var lock = GILState()
+        lock.ensure()
+        defer { lock.release() }
+
         // Ensure Python is initialized, and check for version match.
         let versionMajor = Python.versionInfo.major
         let versionMinor = Python.versionInfo.minor
@@ -1709,6 +1819,8 @@ extension PythonFunction : PythonConvertible {
         }
 
         let destructor: @convention(c) (PyObjectPointer?) -> Void = { capsulePointer in
+            let threadState = PyGILState_Ensure()
+            defer { PyGILState_Release(threadState) }
             let funcPointer = PyCapsule_GetPointer(capsulePointer, nil)
             Unmanaged<PyFunction>.fromOpaque(funcPointer).release()
         }
@@ -1938,4 +2050,16 @@ extension PythonClass : PythonConvertible {
     public var pythonObject: PythonObject {
         typeObject
     }
+}
+
+public struct PyNone : PythonConvertible {
+    public var pythonObject: PythonObject {
+        var lock = GILState()
+        lock.ensure()
+        defer { lock.release() }
+
+        let none = Py_BuildValue("")!
+        return PythonObject(none)
+    }
+
 }
