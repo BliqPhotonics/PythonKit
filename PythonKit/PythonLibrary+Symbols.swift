@@ -18,6 +18,8 @@
 // Required Python typealiases and constants.
 //===----------------------------------------------------------------------===//
 
+import Foundation
+
 @usableFromInline
 typealias PyObjectPointer = UnsafeMutableRawPointer
 typealias PyMethodDefPointer = UnsafeMutableRawPointer
@@ -34,6 +36,8 @@ let Py_NE: Int32 = 3
 let Py_GT: Int32 = 4
 let Py_GE: Int32 = 5
 
+let PyGILState_lock = NSRecursiveLock()
+
 //===----------------------------------------------------------------------===//
 // Python library symbols lazily loaded at runtime.
 //===----------------------------------------------------------------------===//
@@ -41,11 +45,22 @@ let Py_GE: Int32 = 5
 let Py_Initialize: @convention(c) () -> Void =
     PythonLibrary.loadSymbol(name: "Py_Initialize")
 
-let PyGILState_Ensure: @convention(c) () -> UnsafeMutableRawPointer? =
+let __PyGILState_Ensure: @convention(c) () -> UnsafeMutableRawPointer? =
     PythonLibrary.loadSymbol(name: "PyGILState_Ensure")
 
-let PyGILState_Release: @convention(c) (UnsafeMutableRawPointer?) -> Void =
+func PyGILState_Ensure() -> UnsafeMutableRawPointer? {
+    PyGILState_lock.lock()
+    return nil 
+    //__PyGILState_Ensure()
+}
+
+let __PyGILState_Release: @convention(c) (UnsafeMutableRawPointer?) -> Void =
     PythonLibrary.loadSymbol(name: "PyGILState_Release")
+
+func PyGILState_Release(_ gilState: UnsafeMutableRawPointer?) {
+    PyGILState_lock.unlock()
+    //__PyGILState_Release(gilState)
+}
 
 let Py_IncRef: @convention(c) (PyObjectPointer?) -> Void =
     PythonLibrary.loadSymbol(name: "Py_IncRef")
