@@ -31,7 +31,7 @@ struct GILState {
     }
 }
 
-class PyThreadState {
+class GILAllowThreads {
     private let threadState: UnsafeMutableRawPointer?
 
     init() {
@@ -725,11 +725,11 @@ public struct PythonInterface {
     /// A dictionary of the Python builtins.
     public let builtins: PythonObject
     
-    private let pyThreadState: PyThreadState
+    private let pyThreadState: GILAllowThreads
     
     init() {
         Py_Initialize()   // Initialize Python
-        pyThreadState = PyThreadState() // Release the GIL
+        pyThreadState = GILAllowThreads() // Release the GIL
         
         let threadState = PyGILState_Ensure()
         defer { PyGILState_Release(threadState) }
