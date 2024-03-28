@@ -31,6 +31,18 @@ struct GILState {
     }
 }
 
+class PyThreadState {
+    private let threadState: UnsafeMutableRawPointer?
+
+    init() {
+        threadState = PyEval_SaveThread() // Release the GIL
+    }
+
+    deinit {
+        PyEval_RestoreThread(threadState) // Re-acquire the GIL
+    }
+}
+
 //===----------------------------------------------------------------------===//
 // `PyReference` definition
 //===----------------------------------------------------------------------===//
@@ -322,6 +334,8 @@ public struct ThrowingPythonObject {
         try throwPythonErrorIfPresent()
         
         let threadState = PyGILState_Ensure()
+        defer { PyGILState_Release(threadState) }
+        
         // Positional arguments are passed as a tuple of objects.
         let argTuple = pyTuple(args.map { $0.pythonObject })
         defer { Py_DecRef(argTuple) }
@@ -332,8 +346,6 @@ public struct ThrowingPythonObject {
         // error, like `self` not being a Python callable.
         let selfObject = base.ownedPyObject
         defer { Py_DecRef(selfObject) }
-
-        defer { PyGILState_Release(threadState) }
         
         guard let result = PyObject_CallObject(selfObject, argTuple) else {
             // If a Python exception was thrown, throw a corresponding Swift error.
@@ -713,8 +725,12 @@ public struct PythonInterface {
     /// A dictionary of the Python builtins.
     public let builtins: PythonObject
     
+    private let pyThreadState: PyThreadState
+    
     init() {
         Py_Initialize()   // Initialize Python
+        pyThreadState = PyThreadState() // Release the GIL
+        
         let threadState = PyGILState_Ensure()
         defer { PyGILState_Release(threadState) }
 
@@ -786,6 +802,8 @@ public struct PythonInterface {
 // Create a Python tuple object with the specified elements.
 private func pyTuple<T : Collection>(_ vals: T) -> OwnedPyObjectPointer
 where T.Element : PythonConvertible {
+    let threadState = PyGILState_Ensure()
+    defer { PyGILState_Release(threadState) }
     let tuple = PyTuple_New(vals.count)!
     for (index, element) in vals.enumerated() {
         // `PyTuple_SetItem` steals the reference of the object stored.

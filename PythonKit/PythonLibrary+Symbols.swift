@@ -45,22 +45,17 @@ let PyGILState_lock = NSRecursiveLock()
 let Py_Initialize: @convention(c) () -> Void =
     PythonLibrary.loadSymbol(name: "Py_Initialize")
 
-let __PyGILState_Ensure: @convention(c) () -> UnsafeMutableRawPointer? =
+let PyEval_SaveThread: @convention(c) () -> UnsafeMutableRawPointer? =
+    PythonLibrary.loadSymbol(name: "PyEval_SaveThread")
+
+let PyEval_RestoreThread: @convention(c) (UnsafeMutableRawPointer?) -> Void =
+    PythonLibrary.loadSymbol(name: "PyEval_RestoreThread")
+
+let PyGILState_Ensure: @convention(c) () -> UnsafeMutableRawPointer? =
     PythonLibrary.loadSymbol(name: "PyGILState_Ensure")
 
-func PyGILState_Ensure() -> UnsafeMutableRawPointer? {
-    PyGILState_lock.lock()
-    return nil 
-    //__PyGILState_Ensure()
-}
-
-let __PyGILState_Release: @convention(c) (UnsafeMutableRawPointer?) -> Void =
+let PyGILState_Release: @convention(c) (UnsafeMutableRawPointer?) -> Void =
     PythonLibrary.loadSymbol(name: "PyGILState_Release")
-
-func PyGILState_Release(_ gilState: UnsafeMutableRawPointer?) {
-    PyGILState_lock.unlock()
-    //__PyGILState_Release(gilState)
-}
 
 let Py_IncRef: @convention(c) (PyObjectPointer?) -> Void =
     PythonLibrary.loadSymbol(name: "Py_IncRef")
