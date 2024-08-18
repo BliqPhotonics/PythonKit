@@ -19,6 +19,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+import AppKit
+import Foundation
+
 struct GILState {
     private var threadState: UnsafeMutableRawPointer? = nil
 
@@ -28,18 +31,6 @@ struct GILState {
 
     mutating func release() {
         PyGILState_Release(threadState)
-    }
-}
-
-class GILAllowThreads {
-    private let threadState: UnsafeMutableRawPointer?
-
-    init() {
-        threadState = PyEval_SaveThread() // Release the GIL
-    }
-
-    deinit {
-        PyEval_RestoreThread(threadState) // Re-acquire the GIL
     }
 }
 
@@ -721,19 +712,15 @@ public let Python = PythonInterface()
 ///   directly. Instead, please use the global instance of `PythonInterface`
 ///   called `Python`.
 @dynamicMemberLookup
-public struct PythonInterface {
+public class PythonInterface {
     /// A dictionary of the Python builtins.
     public let builtins: PythonObject
     
-    private let pyThreadState: GILAllowThreads
+    private let mainThreadState: UnsafeMutableRawPointer?
     
     init() {
         Py_Initialize()   // Initialize Python
-        pyThreadState = GILAllowThreads() // Release the GIL
         
-        let threadState = PyGILState_Ensure()
-        defer { PyGILState_Release(threadState) }
-
         builtins = PythonObject(PyEval_GetBuiltins())
         
         // Runtime Fixes:
@@ -750,8 +737,17 @@ public struct PythonInterface {
             if sys.version_info.major == 3 and sys.platform == "darwin":
                 sys.executable = os.path.join(sys.exec_prefix, "bin", "python3")
             """)
-
-
+        
+        mainThreadState = PyEval_SaveThread() // Fully release the GIL to begin allowing threads
+        
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(applicationWillTerminate(notification:)),
+                                               name: NSApplication.willTerminateNotification,
+                                               object: nil)
+    }
+    
+    @objc func applicationWillTerminate(notification: Notification) {
+        PyEval_RestoreThread(mainThreadState) // Acquire the GIL on app exit to provent crash
     }
     
     public func attemptImport(_ name: String) throws -> PythonObject {

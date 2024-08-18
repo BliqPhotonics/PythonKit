@@ -18,8 +18,6 @@
 // Required Python typealiases and constants.
 //===----------------------------------------------------------------------===//
 
-import Foundation
-
 @usableFromInline
 typealias PyObjectPointer = UnsafeMutableRawPointer
 typealias PyMethodDefPointer = UnsafeMutableRawPointer
@@ -35,8 +33,6 @@ let Py_EQ: Int32 = 2
 let Py_NE: Int32 = 3
 let Py_GT: Int32 = 4
 let Py_GE: Int32 = 5
-
-let PyGILState_lock = NSRecursiveLock()
 
 //===----------------------------------------------------------------------===//
 // Python library symbols lazily loaded at runtime.
